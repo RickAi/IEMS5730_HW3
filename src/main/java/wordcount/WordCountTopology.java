@@ -1,15 +1,17 @@
 package wordcount;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.storm.Config;
 import org.apache.storm.LocalCluster;
 import org.apache.storm.StormSubmitter;
-import org.apache.storm.spout.SpoutOutputCollector;
+import org.apache.storm.kafka.spout.KafkaSpout;
+import org.apache.storm.kafka.spout.KafkaSpoutConfig;
+import org.apache.storm.kafka.spout.RecordTranslator;
 import org.apache.storm.task.OutputCollector;
 import org.apache.storm.task.TopologyContext;
 import org.apache.storm.topology.OutputFieldsDeclarer;
 import org.apache.storm.topology.TopologyBuilder;
 import org.apache.storm.topology.base.BaseRichBolt;
-import org.apache.storm.topology.base.BaseRichSpout;
 import org.apache.storm.tuple.Fields;
 import org.apache.storm.tuple.Tuple;
 import org.apache.storm.tuple.Values;
@@ -17,57 +19,9 @@ import org.apache.storm.tuple.Values;
 import java.io.*;
 import java.util.*;
 
+import static org.apache.storm.kafka.spout.KafkaSpoutConfig.FirstPollOffsetStrategy.EARLIEST;
+
 public class WordCountTopology {
-
-    public static class FileReaderSpout extends BaseRichSpout {
-
-        private SpoutOutputCollector collector;
-        private boolean processed = false;
-        private BufferedReader br = null;
-
-        @Override
-        public void open(Map map, TopologyContext topologyContext, SpoutOutputCollector spoutOutputCollector) {
-            this.collector = spoutOutputCollector;
-            try {
-                this.br = new BufferedReader(new FileReader(DATA_PATH));
-            } catch (FileNotFoundException e) {
-                e.printStackTrace();
-            }
-        }
-
-        @Override
-        public void nextTuple() {
-            // DO NOT emit the entire file in one nextTuple to avoid failure caused by network
-            // congestion. You can emit one line for each ​nextTuple( )​ call.
-            if (this.br == null || processed) {
-                try {
-                    Thread.sleep(5000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                return ;
-            }
-
-            try {
-                String buffer;
-                if ((buffer = this.br.readLine()) != null) {
-                    this.collector.emit(new Values(buffer));
-                    //counter(CounterType.EMIT);
-                } else {
-                    processed = true;
-                }
-            } catch (FileNotFoundException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-
-        @Override
-        public void declareOutputFields(OutputFieldsDeclarer outputFieldsDeclarer) {
-            outputFieldsDeclarer.declare(new Fields("line"));
-        }
-    }
 
     public static class SplitSentenceBolt extends BaseRichBolt {
 
@@ -80,17 +34,16 @@ public class WordCountTopology {
 
         @Override
         public void execute(Tuple tuple) {
-            String line = tuple.getStringByField("line");
+            String line = tuple.getStringByField("value");
             // split with space
             String[] words = line.split(" ");
             for (String word : words) {
                 if (!word.isEmpty()) {
-                    this.collector.emit(new Values(word));
-                    //counter(CounterType.EMIT);
+                    // your Bolts should perform proper tuple-anchoring and acknowledgement
+                    this.collector.emit(tuple, new Values(word));
                 }
             }
             this.collector.ack(tuple);
-            //counter(CounterType.ACK);
         }
 
         @Override
@@ -103,6 +56,8 @@ public class WordCountTopology {
 
         private OutputCollector collector;
         private LinkedHashMap<String, Integer> counterMap;
+        private static final int TARGET_FAIL_COUNT = 10;
+        private int failCounter = 0;
 
         @Override
         public void prepare(Map map, TopologyContext topologyContext, OutputCollector outputCollector) {
@@ -113,23 +68,27 @@ public class WordCountTopology {
         @Override
         public void execute(Tuple tuple) {
             String word = tuple.getStringByField("word");
+
+            if (word.equals("the") && failCounter < TARGET_FAIL_COUNT) {
+                this.collector.fail(tuple);
+                failCounter += 1;
+                return ;
+            }
+
             if (counterMap.containsKey(word)) {
                 counterMap.put(word, counterMap.get(word) + 1);
             } else {
                 counterMap.put(word, 1);
             }
             this.collector.ack(tuple);
-            //counter(CounterType.ACK);
         }
 
         @Override
-        public void declareOutputFields(OutputFieldsDeclarer outputFieldsDeclarer) {}
+        public void declareOutputFields(OutputFieldsDeclarer outputFieldsDeclarer) {
+        }
 
         @Override
         public void cleanup() {
-            // dump counters into the console
-            //dumpCounters();
-
             System.out.println("cleanup, sortByValue counterMap start");
             // sort and save result into local file
             Utils.sortByValue(counterMap, new Comparator<Integer>() {
@@ -167,43 +126,27 @@ public class WordCountTopology {
         }
     }
 
-    // Counter Code START
-    // !!! LOCAL USED ONLY
-    public static int emit_counter = 0;
-    public static int ack_counter = 0;
-
-    public static enum CounterType {EMIT, ACK};
-
-    public static synchronized void counter(CounterType type) {
-        if (type == CounterType.EMIT) {
-            emit_counter += 1;
-        } else if (type == CounterType.ACK) {
-            ack_counter += 1;
-        }
-    }
-
-    public static void dumpCounters() {
-        System.out.println("--------DUMP COUNTERS START--------");
-        System.out.println("The number of tuple emitted:" + emit_counter);
-        System.out.println("The number of tuple acked:" + ack_counter);
-        System.out.println("The number of tuple failed:" + (emit_counter - ack_counter));
-        System.out.println("--------DUMP COUNTERS END--------");
-    }
-    // Counter Code END
-
-    public static final String ID_FILE_READ_SPOUT = "file-reader-spout";
+    public static final String KAFKA_SPOUT = "kafka-spout";
     public static final String ID_SPLIT_BOLT = "split-bolt";
     public static final String ID_COUNT_BOLT = "count-bolt";
 
-    // these two path need to be replaced to local path if debug in local
-    public static String DATA_PATH = "/home/yongbiaoai/projects/IEMS5730_HW2/StormData.txt";
-    public static final String RESULT_PATH = "/home/yongbiaoai/projects/IEMS5730_HW2/wordcount_result.txt";
+    public static final String RESULT_PATH = "/home/yongbiaoai/remote/wordcount_result.txt";
+
+    public static final int KAFKA_SPOUT_COUNT = 1;
+    public static final int SPLIT_BOLT_COUNT = 1;
+    public static final int COUNT_BOLT_COUNT = 3;
 
     public static void main(String[] args) {
         TopologyBuilder builder = new TopologyBuilder();
-        builder.setSpout(ID_FILE_READ_SPOUT, new FileReaderSpout(), 1);
-        builder.setBolt(ID_SPLIT_BOLT, new SplitSentenceBolt(), 8).shuffleGrouping(ID_FILE_READ_SPOUT);
-        builder.setBolt(ID_COUNT_BOLT, new WordCountBolt(), 1).globalGrouping(ID_SPLIT_BOLT);
+
+        // Required to use KafkaSpout[6] to support the replay of failed tuples.
+        KafkaSpoutConfig<String, String> config =
+                KafkaSpoutConfig.builder("10.142.0.2:9092", "wordcount").build();
+
+        builder.setSpout(KAFKA_SPOUT, new KafkaSpout<String, String>(config), KAFKA_SPOUT_COUNT);
+        // You are required to extend BaseRichBolt class to implement your SplitSentenceBolt and WordCountBolt class.
+        builder.setBolt(ID_SPLIT_BOLT, new SplitSentenceBolt(), SPLIT_BOLT_COUNT).shuffleGrouping(KAFKA_SPOUT);
+        builder.setBolt(ID_COUNT_BOLT, new WordCountBolt(), COUNT_BOLT_COUNT).globalGrouping(ID_SPLIT_BOLT);
 
         Config conf = new Config();
         conf.setDebug(false);
