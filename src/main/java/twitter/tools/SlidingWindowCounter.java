@@ -16,10 +16,6 @@ public final class SlidingWindowCounter<T> implements Serializable {
     private int windowLengthInSlots;
 
     public SlidingWindowCounter(int windowLengthInSlots) {
-        if (windowLengthInSlots < 2) {
-            throw new IllegalArgumentException(
-                    "Window length in slots must be at least two (you requested " + windowLengthInSlots + ")");
-        }
         this.windowLengthInSlots = windowLengthInSlots;
         this.objCounter = new SlotBasedCounter<T>(this.windowLengthInSlots);
 

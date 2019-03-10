@@ -120,7 +120,7 @@ public class TweetSpout extends BaseRichSpout {
 
         if (tweet != null) {
             // emit the tweet to next stage bolt
-            collector.emit(new Values(tweet));
+            collector.emit(new Values("twitter", tweet.getText()));
         } else {
             // if no tweet is available, wait for 50 ms and return
             Utils.sleep(50);
@@ -151,7 +151,7 @@ public class TweetSpout extends BaseRichSpout {
             OutputFieldsDeclarer outputFieldsDeclarer) {
         // tell storm the schema of the output tuple for this spout
         // tuple consists of a single column called 'tweet'
-        outputFieldsDeclarer.declare(new Fields("tweet"));
+        outputFieldsDeclarer.declare(new Fields("key", "tweet"));
     }
 }
 

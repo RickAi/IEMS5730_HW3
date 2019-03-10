@@ -68,25 +68,25 @@ public class RollingCountBolt extends BaseRichBolt {
     public void execute(Tuple tuple) {
         if (TupleHelpers.isTickTuple(tuple)) {
             LOG.debug("Received tick tuple, triggering emit of current window counts");
-            emitCurrentWindowCounts();
+            emitCurrentWindowCounts(tuple);
         } else {
             countObjAndAck(tuple);
         }
     }
 
-    private void emitCurrentWindowCounts() {
+    private void emitCurrentWindowCounts(Tuple tuple) {
         Map<Object, Long> counts = counter.getCountsThenAdvanceWindow();
         int actualWindowLengthInSeconds = lastModifiedTracker.secondsSinceOldestModification();
         lastModifiedTracker.markAsModified();
         if (actualWindowLengthInSeconds != windowLengthInSeconds) {
             LOG.warn(String.format(WINDOW_LENGTH_WARNING_TEMPLATE, actualWindowLengthInSeconds, windowLengthInSeconds));
         }
-        emit(counts, actualWindowLengthInSeconds);
+        emit(tuple, counts, actualWindowLengthInSeconds);
     }
 
     private int tweetCount;
 
-    private void emit(Map<Object, Long> counts, int actualWindowLengthInSeconds) {
+    private void emit(Tuple tuple, Map<Object, Long> counts, int actualWindowLengthInSeconds) {
         int tweetCountInSeconds = tweetCount;
         // reset tweetCount counter
         tweetCount = 0;
@@ -101,7 +101,7 @@ public class RollingCountBolt extends BaseRichBolt {
             // a hashtag is said to be popular if it appears in more than one percent
             // of all the tweets received since the last report (printout).
             if (intCount > popularThreshold) {
-                collector.emit(new Values(obj, intCount, actualWindowLengthInSeconds));
+                collector.emit(tuple, new Values(obj, intCount, actualWindowLengthInSeconds));
             }
         }
     }
@@ -111,9 +111,15 @@ public class RollingCountBolt extends BaseRichBolt {
         if (type == 0) {
             tweetCount += 1;
         } else {
-            Object obj = tuple.getValueByField("hashtag");
-            counter.incrementCount(obj);
-            collector.ack(tuple);
+            String hashtag = (String) tuple.getValueByField("hashtag");
+
+            // the corresponding bolt should fail the delivery of 10% of the tuples which carry the hashtag “Trump”
+            if (hashtag.equals("Trump") && Math.random() * 100 < 10) {
+                collector.fail(tuple);
+            } else {
+                counter.incrementCount(hashtag);
+                collector.ack(tuple);
+            }
         }
     }
 
