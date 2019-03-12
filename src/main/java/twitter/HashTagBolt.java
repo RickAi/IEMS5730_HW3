@@ -39,12 +39,29 @@ public class HashTagBolt extends BaseRichBolt {
     public void execute(Tuple tuple) {
         //Get the tweet
         String tweet = tuple.getStringByField("value");
+        List<String> hashTags = getHashTags(tweet);
+        // fail the delivery of 10% of the tuples which carry the hashtag Trump
+        if (containsTrump(hashTags) && Math.random() * 100 < 10) {
+            collector.fail(tuple);
+            return ;
+        }
+
         //Loop through the hashtags
-        for (String hashtag : getHashTags(tweet)) {
+        for (String hashtag : hashTags) {
             //Emit each hashtag
+            // the corresponding bolt should fail the delivery of 10% of the tuples which carry the hashtag “Trump”
             collector.emit(tuple, new Values(1, hashtag));
         }
         collector.emit(tuple, new Values(0, null));
+    }
+
+    private boolean containsTrump(List<String> tags) {
+        for (String tag : tags) {
+            if (tag.equals("Trump")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> getHashTags(String tweet) {

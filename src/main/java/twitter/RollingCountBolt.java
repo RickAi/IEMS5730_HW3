@@ -112,14 +112,8 @@ public class RollingCountBolt extends BaseRichBolt {
             tweetCount += 1;
         } else {
             String hashtag = (String) tuple.getValueByField("hashtag");
-
-            // the corresponding bolt should fail the delivery of 10% of the tuples which carry the hashtag “Trump”
-            if (hashtag.equals("Trump") && Math.random() * 100 < 10) {
-                collector.fail(tuple);
-            } else {
-                counter.incrementCount(hashtag);
-                collector.ack(tuple);
-            }
+            counter.incrementCount(hashtag);
+            collector.ack(tuple);
         }
     }
 
